@@ -1,0 +1,11 @@
+{
+  "rays": 65536,
+  "unique": 6107,
+  "unresolved": 0,
+  "fov": 45.0,
+  "n": 256,
+  "conserved_quantity_max_error": 9.001977829825591e-09,
+  "shadow_radius_pixels": 52.0,
+  "theory_radius_pixels": 52.448314753724205,
+  "desktop_window_tested": false
+}
