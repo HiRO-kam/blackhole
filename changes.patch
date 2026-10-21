@@ -1,0 +1,594 @@
+--- a/imaging.py
++++ b/imaging.py
+@@ -1,97 +1,164 @@
+-"""Finite static observer, spherical emitting background, G=c=M=E=1."""
++"""Finite planar emitting screen; static observer, G=c=M=E=1."""
++import time
+ import numpy as np
+-from ray_engine import trace_batch
+-from geodesic import rk4_step
++from ray_engine import (
++    trace_batch, trace_path, constraint_error, STATUS_LABELS,
++    SCENE_OBSERVER, SCENE_BOUNDARY, SCREEN_X, SCREEN_HALF_SIZE,
++    UNRESOLVED, CAPTURED, SCREEN_HIT, MISSED, NUMERICAL_FAILURE,
++)
++
++MISSED_COLOR = np.array([28, 36, 48], dtype=np.uint8)
++UNRESOLVED_COLOR = np.array([255, 0, 180], dtype=np.uint8)
++FAILURE_COLOR = np.array([255, 64, 64], dtype=np.uint8)
+ 
+ 
+-def trajectory(b, psi=0., r0=30., sky=120.):
+-    # 初期条件
+-    s = np.array([r0, -np.sqrt(1 - b*b/r0**2 * (1 - 2/r0)), 0.0])
++def trajectory(b, psi=0., r0=SCENE_OBSERVER, sky=SCENE_BOUNDARY,
++               *, scale=1.0, max_steps=30000):
++    path, status, _ = trace_path(b, psi, r0, sky, scale, max_steps=max_steps)
++    return path, STATUS_LABELS[status]
+ 
+-    history = [s.copy()]
+-    status = '未判定'
+ 
+-    for _ in range(18000):
+-        old = s.copy()
++def screen_background(y, z, rotation=0., grid=True, *, show_lines=True):
++    """RGB texture of the physical screen at Cartesian (SCREEN_X, y, z).
+ 
+-        # できるだけ render_image 側の trace_batch と近い刻み方にそろえる
+-        h = min(0.7, 0.006 * old[0])
+-        s = rk4_step(s, h, b, 1.0)
+-
+-        # 捕獲判定
+-        if s[0] <= 2.0:
+-            t = (2.0 - old[0]) / (s[0] - old[0])
+-            s = old + t * (s - old)
+-            history.append(s.copy())
+-            status = '捕獲'
+-            break
+-
+-        # 背景球面への到達判定
+-        if s[0] >= sky and s[1] > 0:
+-            t = (sky - old[0]) / (s[0] - old[0])
+-            s = old + t * (s - old)
+-            history.append(s.copy())
+-            status = '背景到達'
+-            break
+-
+-        history.append(s.copy())
+-
+-    a = np.array(history)
+-    r, p = a[:, 0], a[:, 2]
+-
+-    path = np.array([
+-        r * np.cos(p),
+-        r * np.sin(p) * np.cos(psi),
+-        r * np.sin(p) * np.sin(psi)
+-    ]).T
+-
+-    return path, status
+-
+-def background(d, rotation=0., grid=True):
+-    lon = np.arctan2(d[..., 2], d[..., 0])+rotation
+-    lat = np.arcsin(np.clip(d[..., 1], -1, 1))
+-    u, v = lon/(2*np.pi) % 1, .5-lat/np.pi
++    Rotation turns the texture within the fixed rectangle, not the ray or plane.
++    This sampler is shared by the generated image, flat reference and 3D plane.
++    """
++    y, z = np.broadcast_arrays(np.asarray(y, float), np.asarray(z, float))
++    c, s = np.cos(rotation), np.sin(rotation)
++    u = .5+(c*y+s*z)/(2*SCREEN_HALF_SIZE)
++    v = .5-(-s*y+c*z)/(2*SCREEN_HALF_SIZE)
+     if grid:
+-        c = np.stack((.25+.45*u, .25+.4*v, .4+.25*np.sin(lon)**2), -1)
+-        lines = (np.minimum(u*24 % 1, 1-u*24 % 1)<.035) | (np.minimum(v*12 % 1, 1-v*12 % 1)<.035)
+-        c[lines] = [.95, .96, 1.]
++        color = np.stack((.25+.45*np.clip(u, 0, 1),
++                           .25+.40*np.clip(v, 0, 1),
++                           .4+.25*np.sin(2*np.pi*u)**2), -1)
++        lines = ((np.minimum(u*12 % 1, 1-u*12 % 1) < .035) |
++                 (np.minimum(v*12 % 1, 1-v*12 % 1) < .035))
++        if show_lines:
++            color = np.where(lines[..., None], [.95, .96, 1.], color)
+     else:
+-        glow = np.exp(-((lat-.28*np.sin(lon*2))/.13)**2)
+-        c = np.stack((.015+.10*glow, .025+.09*glow, .06+.18*glow), -1)
+-        # Deterministic celestial texture, identical for lensed/reference images.
++        glow = np.exp(-((v-.5-.15*np.sin(4*np.pi*u))/.065)**2)
++        color = np.stack((.015+.10*glow, .025+.09*glow, .06+.18*glow), -1)
+         ix, iy = np.floor(u*900), np.floor(v*450)
+         h = np.mod(np.sin(ix*127.1+iy*311.7)*43758.5453, 1)
+-        star = h > .994
+-        c[star] = (.65+.35*h[star])[:, None]
+-    return np.uint8(np.clip(c, 0, 1)*255)
++        color = np.where((h > .994)[..., None], (.65+.35*h)[..., None], color)
++    return np.uint8(np.clip(color, 0, 1)*255)
+ 
+ 
+-def render_image(n=256, fov=45., rotation=0., grid=True, progress=None):
+-    r0=30.
++def screen_grid_lines(rotation=0.):
++    """Texture-grid centre lines clipped to the physical square, for 3D display.
++
++    Drawing these as lines keeps the Tk animation light and avoids losing thin
++    grid stripes when the surface texture is sampled with a coarse mesh.
++    """
++    c, s = np.cos(rotation), np.sin(rotation)
++    limit = SCREEN_HALF_SIZE
++    spacing = 2*limit/12
++    result = []
++    for a, b in [(c, s), (s, -c)]:
++        for level in np.arange(-2*limit, 2*limit+spacing/2, spacing):
++            points = []
++            for edge in [-limit, limit]:
++                if abs(b) > 1e-14:
++                    z = (level-a*edge)/b
++                    if abs(z) <= limit+1e-12:
++                        points.append([edge, float(np.clip(z, -limit, limit))])
++                if abs(a) > 1e-14:
++                    y = (level-b*edge)/a
++                    if abs(y) <= limit+1e-12:
++                        points.append([float(np.clip(y, -limit, limit)), edge])
++            if len(points) >= 2:
++                points = np.unique(points, axis=0)
++                if len(points) >= 2:
++                    result.append(points[[0, -1]])
++    return result
++
++
++def background(points, rotation=0., grid=True):
++    """Compatibility name: points now mean physical screen xyz, not sky units."""
++    points = np.asarray(points)
++    return screen_background(points[..., 1], points[..., 2], rotation, grid)
++
++
++def camera_ray(y, z, r0=SCENE_OBSERVER):
++    """Camera-plane slopes -> original finite static observer's (b, psi)."""
++    rho = np.hypot(y, z)
++    b = r0*rho/np.sqrt(1+rho*rho)/np.sqrt(1-2/r0)
++    return b, np.arctan2(z, y)
++
++
++def pixel_ray(x, y, n, fov, r0=SCENE_OBSERVER):
++    """Matplotlib pixel coordinates have integer centres, like render_image."""
++    t = np.tan(np.deg2rad(fov/2))
++    yy = (np.asarray(x)+.5-n/2)/(n/2)*t
++    zz = -(np.asarray(y)+.5-n/2)/(n/2)*t
++    return camera_ray(yy, zz, r0)
++
++
++def render_image(n=256, fov=45., rotation=0., grid=True, progress=None,
++                 *, scale=1.0, max_steps=30000, batch_size=2048):
++    if not isinstance(n, (int, np.integer)) or n < 1:
++        raise ValueError('n must be a positive integer')
++    if not np.isfinite(fov) or not 0 < fov < 180:
++        raise ValueError('fov must be between 0 and 180 degrees')
++    if not np.isfinite(rotation):
++        raise ValueError('rotation must be finite')
++    if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
++        raise ValueError('batch_size must be a positive integer')
++    start_time = time.perf_counter()
++    r0 = SCENE_OBSERVER
+     q = (np.arange(n)+.5-n/2)/(n/2)*np.tan(np.deg2rad(fov/2))
+     yy, zz = np.meshgrid(q, -q)
+     rho = np.hypot(yy, zz)
+-    b = r0*rho/np.sqrt(1+rho*rho)/np.sqrt(1-2/r0)
+-    # Only exact duplicate radii share work; no interpolation across the shadow edge.
+-    unique, inv = np.unique(b, return_inverse=True)
+-    phi = np.empty(len(unique)); status = np.empty(len(unique), int)
+-    for start in range(0, len(unique), 2048):
+-        end = min(start+2048, len(unique))
+-        s, st, _ = trace_batch(unique[start:end], r0=r0, sky=120.)
+-        phi[start:end], status[start:end] = s[:, 2], st
+-        if progress: progress(end/len(unique))
+-    p, st = phi[inv].reshape(n,n), status[inv].reshape(n,n)
+-    uy = np.divide(yy, rho, out=np.zeros_like(yy), where=rho>0)
+-    uz = np.divide(zz, rho, out=np.zeros_like(zz), where=rho>0)
+-    d = np.stack((np.cos(p), np.sin(p)*uy, np.sin(p)*uz), -1)
+-    image = background(d, rotation, grid)
+-    image[st==1] = 0
+-    image[st==0] = [255, 0, 180]  # Never silently turn unfinished rays black.
+-    # Straight rays intersect the same celestial sphere (finite observer).
+-    direction = np.stack((-np.ones_like(yy), yy, zz), -1)
+-    direction /= np.linalg.norm(direction, axis=-1)[...,None]
+-    dx=direction[...,0]
+-    distance=-r0*dx+np.sqrt((r0*dx)**2+120**2-r0**2)
+-    reference=direction*distance[...,None]; reference[...,0]+=r0
+-    reference=background(reference/120., rotation, grid)
+-    return image, reference, {'rays': n*n, 'unique':len(unique), 'unresolved':int((st==0).sum()), 'fov':fov, 'n':n}
++    b, _ = camera_ray(yy, zz, r0)
++    uy = np.divide(yy, rho, out=np.zeros_like(yy), where=rho > 0)
++    uz = np.divide(zz, rho, out=np.zeros_like(zz), where=rho > 0)
++    # The square has reflection/quarter-turn symmetry, not axial symmetry.
++    # Sharing requires BOTH identical b AND identical aperture orientation.
++    # No interpolation in b or across the shadow/screen edges is performed.
++    aperture = np.maximum(np.abs(uy), np.abs(uz))
++    aperture[rho == 0] = 1.
++    unique, inv = np.unique(np.column_stack((b.ravel(), aperture.ravel())),
++                             axis=0, return_inverse=True)
++    states = np.empty((len(unique), 3))
++    status = np.empty(len(unique), int)
++    max_error = 0.
++    for start in range(0, len(unique), batch_size):
++        end = min(start+batch_size, len(unique))
++        representative_psi = np.arccos(np.clip(unique[start:end, 1], 0, 1))
++        s, st, errors = trace_batch(unique[start:end, 0], r0=r0,
++                                     sky=SCENE_BOUNDARY, scale=scale,
++                                     psi=representative_psi, max_steps=max_steps)
++        states[start:end], status[start:end] = s, st
++        max_error = max(max_error, float(errors.max()))
++        if progress:
++            progress(end/len(unique))
++    st = status[inv].reshape(n, n)
++    final = states[inv].reshape(n, n, 3)
++    w = final[..., 0]*np.sin(final[..., 2])
++    image = np.empty((n, n, 3), dtype=np.uint8)
++    image[:] = MISSED_COLOR
++    hit = st == SCREEN_HIT
++    # Sample the physical hit point only. Missed/unresolved rays have no texel.
++    image[hit] = screen_background((w*uy)[hit], (w*uz)[hit], rotation, grid)
++    image[st == CAPTURED] = 0
++    image[st == UNRESOLVED] = UNRESOLVED_COLOR
++    image[st == NUMERICAL_FAILURE] = FAILURE_COLOR
++    # Gravity-free rays intersect the very same rectangle in physical units.
++    ref_y, ref_z = (r0-SCREEN_X)*yy, (r0-SCREEN_X)*zz
++    ref_hit = (np.abs(ref_y) <= SCREEN_HALF_SIZE) & (np.abs(ref_z) <= SCREEN_HALF_SIZE)
++    reference = np.empty_like(image)
++    reference[:] = MISSED_COLOR
++    reference[ref_hit] = screen_background(ref_y[ref_hit], ref_z[ref_hit], rotation, grid)
++    meta = {'rays': n*n, 'unique': len(unique), 'fov': fov, 'n': n,
++            'rotation': rotation, 'grid': grid, 'scale': scale,
++            'captured': int((st == CAPTURED).sum()),
++            'screen_hits': int(hit.sum()), 'missed': int((st == MISSED).sum()),
++            'unresolved': int((st == UNRESOLVED).sum()),
++            'numerical_failures': int((st == NUMERICAL_FAILURE).sum()),
++            'max_error': max_error,
++            'max_endpoint_error': float(constraint_error(states, unique[:, 0]).max()),
++            'elapsed_seconds': time.perf_counter()-start_time,
++            'observer': r0, 'outer': SCENE_BOUNDARY,
++            'screen_x': SCREEN_X, 'screen_half_size': SCREEN_HALF_SIZE}
++    return image, reference, meta
+--- a/ray_engine.py
++++ b/ray_engine.py
+@@ -1,13 +1,23 @@
+-"""Schwarzschild null geodesics; G=c=M=E=1. Based on the supplied RK4.
++"""Schwarzschild null geodesics, G=c=M=E=1, with finite-screen events.
+ 
+-Batch rays use independent radius-dependent affine steps, not error-controlled
+-steps. Termination is interpolated to r=2 or the emitting celestial sphere.
++The original differential equations, RK4 and inward initial conditions are
++unchanged. Each accepted RK4 interval is a Cartesian line segment for event
++localisation. Screen, horizon and outer-boundary events compete by segment
++fraction; only the first event terminates a ray.
+ """
+ import numpy as np
+ 
+ BC = np.sqrt(27.0)
+-OBSERVER = 40.0
+-SKY = 400.0
++OBSERVER = 40.0                 # Retain the legacy engine/LUT defaults.
++SKY = 400.0                    # Outer computational boundary, not an emitter.
++SCENE_OBSERVER = 30.0
++SCENE_BOUNDARY = 120.0
++SCREEN_X = -19.0
++SCREEN_HALF_SIZE = 12.0
++UNRESOLVED, CAPTURED, SCREEN_HIT, MISSED, NUMERICAL_FAILURE = range(5)
++STATUS_LABELS = {UNRESOLVED: '未判定', CAPTURED: '捕獲',
++                 SCREEN_HIT: 'スクリーン到達', MISSED: 'スクリーン未到達',
++                 NUMERICAL_FAILURE: '数値エラー'}
+ 
+ 
+ def derivatives(s, b):
+@@ -24,42 +34,166 @@
+     return s+h*(k1+2*k2+2*k3+k4)/6
+ 
+ 
+-def trace_batch(b, r0=OBSERVER, sky=SKY, scale=1.0):
+-    b = np.asarray(b, dtype=float)
++def cartesian(s, psi=0.0):
++    """Convert (r, dr/dlambda, phi) in the ray's orbital plane to xyz."""
++    s = np.asarray(s)
++    transverse = s[..., 0]*np.sin(s[..., 2])
++    return np.stack((s[..., 0]*np.cos(s[..., 2]),
++                     transverse*np.cos(psi), transverse*np.sin(psi)), -1)
++
++
++def _sphere_fraction(a, d, radius, outward):
++    """First inward / outward sphere crossing of a+t*d, 0 <= t <= 1."""
++    aa = np.einsum('ij,ij->i', d, d)
++    bb = np.einsum('ij,ij->i', a, d)
++    cc = np.einsum('ij,ij->i', a, a)-radius*radius
++    disc = bb*bb-aa*cc
++    valid = (aa > 0) & (disc >= 0)
++    # Stable quadratic roots also work for short segments near a boundary.
++    root = np.sqrt(np.maximum(disc, 0))
++    q = -bb-np.copysign(root, bb)
++    r1 = np.divide(q, aa, out=np.full_like(aa, np.inf), where=aa > 0)
++    r2 = np.divide(cc, q, out=np.zeros_like(aa), where=q != 0)
++    t = np.maximum(r1, r2) if outward else np.minimum(r1, r2)
++    return np.where(valid & (t >= 0) & (t <= 1), t, np.inf)
++
++
++def segment_events(old, new, outer, screen_x=SCREEN_X,
++                   half_size=SCREEN_HALF_SIZE):
++    """Return status, fraction, endpoint for Cartesian segments (N, 3).
++
++    A plane crossing outside the rectangle is ignored, allowing later valid
++    crossings. Edges are included. On ties: horizon, then screen, then outer.
++    screen_x=None is an explicit legacy celestial-sphere mode used by build_lut.
++    """
++    old, new = np.asarray(old, float), np.asarray(new, float)
++    d = new-old
++    capture = _sphere_fraction(old, d, 2.0, False)
++    escape = _sphere_fraction(old, d, outer, True)
++    hit = np.full(len(old), np.inf)
++    if screen_x is not None:
++        dx = d[:, 0]
++        t = np.divide(screen_x-old[:, 0], dx, out=np.full(len(old), np.inf),
++                      where=dx != 0)
++        # A ray already on the screen is an immediate hit if inside its edges.
++        t[(dx == 0) & (old[:, 0] == screen_x)] = 0.0
++        crossing = np.flatnonzero((t >= 0) & (t <= 1))
++        yz = old[crossing, 1:]+t[crossing, None]*d[crossing, 1:]
++        inside = np.all(np.abs(yz) <= half_size, axis=1)
++        ix = crossing[inside]
++        hit[ix] = t[ix]
++    status = np.full(len(old), UNRESOLVED, dtype=int)
++    t = np.minimum(np.minimum(capture, hit), escape)
++    done = np.isfinite(t)
++    status[done & (t == escape)] = MISSED if screen_x is not None else SCREEN_HIT
++    status[done & (t == hit)] = SCREEN_HIT
++    status[done & (t == capture)] = CAPTURED
++    fraction = np.where(done, t, 1.0)
++    point = old+fraction[:, None]*d
++    if screen_x is not None:
++        point[status == SCREEN_HIT, 0] = screen_x
++    return status, fraction, point
++
++
++def constraint_error(s, b):
++    r, v, _ = np.asarray(s).T
++    return np.abs(v*v+b*b/r**2*(1-2/r)-1)
++
++
++def _trace(b, r0, sky, scale, psi, screen_x, half_size, max_steps, record):
++    b = np.atleast_1d(np.asarray(b, dtype=float))
++    if b.ndim != 1 or not np.all(np.isfinite(b)):
++        raise ValueError('b must be a finite one-dimensional array')
++    psi = np.broadcast_to(np.asarray(psi, float), b.shape)
++    if not np.all(np.isfinite(psi)):
++        raise ValueError('psi must be finite and broadcastable to b')
++    if not (np.isfinite(r0) and np.isfinite(sky) and 2 < r0 < sky):
++        raise ValueError('Require 2 < observer radius < outer boundary')
++    if not np.isfinite(scale) or not 0 < scale <= 1:
++        raise ValueError('scale must be in (0, 1]; reduce it for convergence checks')
++    if (not isinstance(max_steps, (int, np.integer))) or max_steps < 1:
++        raise ValueError('max_steps must be a positive integer')
++    if screen_x is not None and not np.isfinite(screen_x):
++        raise ValueError('screen_x must be finite, or None for legacy sphere mode')
++    if not np.isfinite(half_size) or half_size <= 0:
++        raise ValueError('half_size must be finite and positive')
+     radicand = 1-b*b/r0**2*(1-2/r0)
+     if np.any(radicand < 0):
+         raise ValueError('Initial direction not accessible to a local observer')
+     s = np.column_stack((np.full(b.size, r0), -np.sqrt(radicand), np.zeros(b.size)))
+-    status = np.zeros(b.size, dtype=int)  # 0 unresolved, 1 captured, 2 background
++    status = np.zeros(b.size, dtype=int)
+     error = np.zeros(b.size)
+-    for _ in range(30000):
+-        ix = np.flatnonzero(status == 0)
++    if record and b.size != 1:
++        raise ValueError('History is only recorded for a single ray')
++    history = [cartesian(s, psi)[0]] if record else None
++    for _ in range(max_steps):
++        ix = np.flatnonzero(status == UNRESOLVED)
+         if not len(ix):
+             break
+         old = s[ix].copy()
+         step = scale*np.minimum(0.7, 0.006*old[:, 0])
+-        new = rk4(old, step, b[ix])
+-        q = new[:, 1]**2+b[ix]**2/new[:, 0]**2*(1-2/new[:, 0])
+-        error[ix] = np.maximum(error[ix], abs(q-1))
+-        capture = new[:, 0] <= 2
+-        escape = (new[:, 0] >= sky) & (new[:, 1] > 0)
+-        done = capture | escape
+-        target = np.where(capture, 2., sky)
+-        frac = np.zeros(len(ix))
+-        frac[done] = (target[done]-old[done, 0])/(new[done, 0]-old[done, 0])
+-        new[done] = old[done]+frac[done, None]*(new[done]-old[done])
++        with np.errstate(over='ignore', divide='ignore', invalid='ignore'):
++            new = rk4(old, step, b[ix])
++            residual = constraint_error(new, b[ix])
++        good = np.all(np.isfinite(new), axis=1) & np.isfinite(residual) & (new[:, 0] > 0)
++        status[ix[~good]] = NUMERICAL_FAILURE
++        error[ix[~good]] = np.inf
++        ix, old, new = ix[good], old[good], new[good]
++        if not len(ix):
++            continue
++        # This diagnostic measures RK4 grid states, before chord interpolation.
++        error[ix] = np.maximum(error[ix], residual[good])
++        old_xyz = cartesian(old, psi[ix])
++        new_xyz = cartesian(new, psi[ix])
++        event, fraction, point = segment_events(old_xyz, new_xyz, sky,
++                                                 screen_x, half_size)
++        done = event != UNRESOLVED
++        if np.any(done):
++            interp = old[done]+fraction[done, None]*(new[done]-old[done])
++            xyz = point[done]
++            w = xyz[:, 1]*np.cos(psi[ix[done]])+xyz[:, 2]*np.sin(psi[ix[done]])
++            interp[:, 0] = np.linalg.norm(xyz, axis=1)
++            raw_phi = np.arctan2(w, xyz[:, 0])
++            # Retain accumulated turns, including negative b, across atan2's cut.
++            interp[:, 2] += np.arctan2(np.sin(raw_phi-interp[:, 2]),
++                                       np.cos(raw_phi-interp[:, 2]))
++            new[done] = interp
+         s[ix] = new
+-        status[ix[capture]] = 1
+-        status[ix[escape]] = 2
++        status[ix] = event
++        if record:
++            history.append(point[0].copy())
++    return s, status, error, history
++
++
++def trace_batch(b, r0=OBSERVER, sky=SKY, scale=1.0, *, psi=0.0,
++                screen_x=SCREEN_X, half_size=SCREEN_HALF_SIZE, max_steps=30000):
++    """Return final (r, v, phi), status, maximum RK4 constraint residual.
++
++    psi specifies orbital-plane orientation and may vary per ray. Status 3 is
++    assigned only upon reaching the outer boundary without a screen hit; step
++    exhaustion remains status 0 and a numerical failure is status 4. Terminal
++    chord interpolation has its own O(h^2) error, separate from the RK4 residual.
++    """
++    s, status, error, _ = _trace(b, r0, sky, scale, psi, screen_x, half_size,
++                                max_steps, False)
+     return s, status, error
+ 
+ 
++def trace_path(b, psi=0.0, r0=SCENE_OBSERVER, sky=SCENE_BOUNDARY, scale=1.0,
++               *, screen_x=SCREEN_X, half_size=SCREEN_HALF_SIZE, max_steps=30000):
++    """The same engine/events as trace_batch, with an exact terminal xyz point."""
++    _, status, error, history = _trace([b], r0, sky, scale, psi, screen_x,
++                                      half_size, max_steps, True)
++    return np.asarray(history), int(status[0]), float(error[0])
++
++
+ def build_lut():
+-    # Extra logarithmic samples resolve multiple turns close to the separatrix.
++    """Legacy spherical-sky LUT; it cannot describe a finite square screen."""
+     near = np.geomspace(2e-7, .2, 1800)
+     b = np.unique(np.r_[np.linspace(0, 24, 6001), BC-near, BC+near])
+-    s, status, error = trace_batch(b)
+-    assert np.all(status), 'Unresolved rays must not be rendered as a shadow'
++    s, status, error = trace_batch(b, screen_x=None)
++    assert np.all(np.isin(status, [CAPTURED, SCREEN_HIT])), 'Unresolved LUT rays'
+     return {'b': b.tolist(), 'phi': s[:, 2].tolist(), 'status': status.tolist(),
+             'observer': OBSERVER, 'sky': SKY, 'max_error': float(error.max()),
+-            'captured': int((status == 1).sum()), 'escaped': int((status == 2).sum())}
++            'captured': int((status == CAPTURED).sum()),
++            'escaped': int((status == SCREEN_HIT).sum())}
+--- a/ray_tracing_3d.py
++++ b/ray_tracing_3d.py
+@@ -11,7 +11,8 @@
+ from matplotlib.figure import Figure
+ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+ from PIL import Image
+-from imaging import trajectory, render_image
++from imaging import trajectory, render_image, screen_background, screen_grid_lines, pixel_ray
++from ray_engine import SCREEN_X, SCREEN_HALF_SIZE, SCENE_OBSERVER
+ 
+ BG = '#101928'
+ FG = '#e9f1fc'
+@@ -78,7 +79,7 @@
+         self.save_button=ttk.Button(actions,text='JPGで保存',command=self.save,state='disabled'); self.save_button.pack(side='left',padx=3)
+         self.message=tk.StringVar(value='左の図はドラッグで回転できます。まず「3本を比較」を押してください。')
+         ttk.Label(bottom_panel,textvariable=self.message,wraplength=1300).pack(fill='x',padx=20,pady=5)
+-        ttk.Label(bottom_panel,text='黒：事象の地平面 r=2M  /  点線：光子球 r=3M  /  奥の面：観測像の展示スクリーン（光の到達面ではありません）\n光線は経路を見せるための速さで動きます。自転なし・G=c=M=1。bは選択した1本、画角は画像全体の設定です。',wraplength=1300).pack(fill='x',padx=20,pady=(0,10))
++        ttk.Label(bottom_panel,text='黒：捕獲 r=2M  /  点線：光子球 r=3M  /  奥の面：光線が当たる背景スクリーン（x=-19、|y|, |z|≤12）\n濃灰：スクリーン未到達（r=120まで追跡） / マゼンタ：未判定 / 赤：数値エラー。光線の表示速度は説明用。G=c=M=1。',wraplength=1300).pack(fill='x',padx=20,pady=(0,10))
+         # 操作パネルを確保した後、残りの領域にグラフを配置
+         self.canvas.get_tk_widget().pack(
+             side="top",
+@@ -107,47 +108,52 @@
+         ax.plot_surface(*(2*a for a in xyz),color='#030509',shade=True,zorder=2)
+         ax.plot_wireframe(*(3*a for a in xyz),rstride=5,cstride=6,color='#6a829c',alpha=.25,linewidth=.5,zorder=3)
+         yy, zz = np.meshgrid(
+-        np.linspace(-24, 24, 40),
+-        np.linspace(-24, 24, 40)
++        np.linspace(-SCREEN_HALF_SIZE, SCREEN_HALF_SIZE, 41),
++        np.linspace(-SCREEN_HALF_SIZE, SCREEN_HALF_SIZE, 41)
+         )
+-        if self.image is None:
+-            colors=np.zeros((40,40,4)); colors[:]=[.12,.24,.36,.7]
+-        else:
+-            colors=np.asarray(Image.fromarray(self.image).resize((40,40)))/255.
+-            # Array rows top-to-bottom, screen z bottom-to-top.
+-            colors=colors[::-1]
++        rotation = self.meta['rotation'] if self.image is not None else np.deg2rad(self.rotation.get())
++        grid = self.meta['grid'] if self.image is not None else self.kind.get() == '色つき格子'
++        # Face centres sample the source texture, never the lensed observer image.
++        colors=screen_background((yy[:-1,:-1]+yy[:-1,1:])/2,
++                                  (zz[:-1,:-1]+zz[1:,:-1])/2,rotation,grid,show_lines=False)/255.
+         ax.plot_surface(
+-        np.full_like(yy, -19),
++        np.full_like(yy, SCREEN_X),
+         yy, zz,
+         facecolors=colors,
+         shade=False,
+-        rcount=40,
+-        ccount=40,
++        rcount=len(yy),
++        ccount=len(yy),
+         zorder=0
+         )
+-        ax.text(-19,0,14,'観測像の展示スクリーン',color=FG,ha='center',fontsize=9)
+-        ax.scatter([30],[0],[0],color='#ffffff',s=35)
+-        ax.text(29,0,3,'観測位置',color=FG,fontsize=9)
++        if grid:
++            for yz in screen_grid_lines(rotation):
++                ax.plot([SCREEN_X,SCREEN_X],yz[:,0],yz[:,1],
++                        color=(.95,.96,1.),lw=.6,zorder=1)
++        ax.text(SCREEN_X,0,14,'背景スクリーン（衝突で停止）',color=FG,ha='center',fontsize=9)
++        ax.scatter([SCENE_OBSERVER],[0],[0],color='#ffffff',s=35)
++        ax.text(SCENE_OBSERVER-1,0,3,'観測位置',color=FG,fontsize=9)
+         ax.set(xlim=(-22,32),ylim=(-16,16),zlim=(-16,16))
+         ax.set_box_aspect((54,32,32)); ax.view_init(22,42)
+         ax.set_axis_off(); ax.set_title('3D：光の経路をたどる',color=FG,fontsize=14)
+         self.lines=[]; self.dots=[]
+         for path,status,b in self.paths:
+-            color='#ffad66' if status=='捕獲' else '#66e4e0'
++            color={'捕獲':'#ffad66', 'スクリーン到達':'#66e4e0',
++                   'スクリーン未到達':'#a5afc0', '未判定':'#ff00b4',
++                   '数値エラー':'#ff4040'}[status]
+             line,=ax.plot([],[],[],color=color,lw=1.8,zorder=4,label=f'b={b:.3f}  {status}')
+             dot,=ax.plot([],[],[],'o',color='white',ms=4,zorder=5)
+             self.lines.append(line); self.dots.append(dot)
+         if self.lines: ax.legend(loc='lower left',facecolor=BG,labelcolor=FG,fontsize=9)
+ 
+     def launch(self,compare=False):
+-        values=[4.5,5.2,7.] if compare else [self.b.get()]
++        values=[4.5,6.,10.] if compare else [self.b.get()]
+         psi=np.deg2rad(self.psi.get())
+         self.paths=[]
+         for b in values:
+             path,status=trajectory(b,psi)
+             self.paths.append((path,status,b))
+         self.frame=0; self.playing=True; self.draw_scene()
+-        self.message.set(' / '.join(f'b={b:.3f}：{s}' for _,s,b in self.paths)+'。水色は脱出、オレンジは捕獲。')
++        self.message.set(' / '.join(f'b={b:.3f}：{s}' for _,s,b in self.paths)+'。水色：到達、灰：未到達、橙：捕獲。未到達は表示範囲外のr=120まで追跡します。')
+         self.canvas.draw_idle()
+ 
+     def toggle(self): self.playing=not self.playing
+@@ -192,14 +198,15 @@
+                     self.ref_ax.set_title('重力がない場合',color=FG,fontsize=9)
+                     self.draw_scene(); self.frame=0; self.playing=bool(self.paths)
+                     self.save_button.configure(state='normal')
+-                    self.message.set(f'{self.meta["rays"]:,}画素を追跡しました。黒は捕獲。像をクリックすると、その方向の光線を表示します。未判定：{self.meta["unresolved"]}')
++                    self.message.set(f'{self.meta["rays"]:,}画素：到達 {self.meta["screen_hits"]:,} / 捕獲 {self.meta["captured"]:,} / 未到達 {self.meta["missed"]:,} / 未判定 {self.meta["unresolved"]} / 数値エラー {self.meta["numerical_failures"]}。像をクリックすると光線を表示します。')
+                     self.canvas.draw_idle()
+         except queue.Empty: pass
+         if self.playing and self.paths:
+             self.frame+=1
+             for (path,_,_),line,dot in zip(self.paths,self.lines,self.dots):
+                 end=min(len(path),max(2,int(len(path)*self.frame/90)))
+-                shown=path[:end:max(1,end//650)]
++                indices=np.unique(np.r_[np.arange(0,end,max(1,end//650)),end-1])
++                shown=path[indices]  # Always include the actual terminal point.
+                 line.set_data_3d(*shown.T); dot.set_data_3d(*path[end-1:end].T)
+             if self.frame>=90: self.playing=False
+             self.canvas.draw_idle()
+@@ -207,10 +214,12 @@
+ 
+     def pick(self,event):
+         if self.image is None or event.inaxes is not self.result_ax or event.xdata is None: return
+-        n=self.meta['n']; t=np.tan(np.deg2rad(self.meta['fov']/2))
+-        y=(event.xdata+.5-n/2)/(n/2)*t; z=-(event.ydata+.5-n/2)/(n/2)*t
+-        rho=np.hypot(y,z); b=30*rho/np.sqrt(1+rho*rho)/np.sqrt(1-2/30)
+-        self.b.set(b); self.psi.set(np.rad2deg(np.arctan2(z,y))%360); self.launch()
++        n=self.meta['n']
++        # imshow reports continuous positions; launch the selected pixel centre.
++        col=int(np.clip(np.floor(event.xdata+.5),0,n-1))
++        row=int(np.clip(np.floor(event.ydata+.5),0,n-1))
++        b,psi=pixel_ray(col,row,n,self.meta['fov'])
++        self.b.set(b); self.psi.set(np.rad2deg(psi)%360); self.launch()
+ 
+     def save(self):
+         if self.image is None: return

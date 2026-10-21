@@ -3,6 +3,7 @@ from pathlib import Path
 import queue
 import threading
 import tkinter as tk
+import time
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import matplotlib
@@ -10,7 +11,8 @@ from matplotlib import font_manager
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from PIL import Image
-from imaging import trajectory, render_image
+from imaging import trajectory, render_image, screen_background, screen_grid_lines, pixel_ray
+from ray_engine import SCREEN_X, SCREEN_HALF_SIZE, SCENE_OBSERVER
 
 BG = '#101928'
 FG = '#e9f1fc'
@@ -77,7 +79,7 @@ class BlackHoleApp:
         self.save_button=ttk.Button(actions,text='JPGで保存',command=self.save,state='disabled'); self.save_button.pack(side='left',padx=3)
         self.message=tk.StringVar(value='左の図はドラッグで回転できます。まず「3本を比較」を押してください。')
         ttk.Label(bottom_panel,textvariable=self.message,wraplength=1300).pack(fill='x',padx=20,pady=5)
-        ttk.Label(bottom_panel,text='黒：事象の地平面 r=2M  /  点線：光子球 r=3M  /  奥の面：観測像の展示スクリーン（光の到達面ではありません）\n光線は経路を見せるための速さで動きます。自転なし・G=c=M=1。bは選択した1本、画角は画像全体の設定です。',wraplength=1300).pack(fill='x',padx=20,pady=(0,10))
+        ttk.Label(bottom_panel,text='黒：捕獲 r=2M  /  点線：光子球 r=3M  /  奥の面：光線が当たる背景スクリーン（x=-19、|y|, |z|≤12）\n濃灰：スクリーン未到達（r=120まで追跡） / マゼンタ：未判定 / 赤：数値エラー。光線の表示速度は説明用。G=c=M=1。',wraplength=1300).pack(fill='x',padx=20,pady=(0,10))
         # 操作パネルを確保した後、残りの領域にグラフを配置
         self.canvas.get_tk_widget().pack(
             side="top",
@@ -105,37 +107,53 @@ class BlackHoleApp:
         xyz=(np.cos(u)*np.sin(v),np.sin(u)*np.sin(v),np.cos(v))
         ax.plot_surface(*(2*a for a in xyz),color='#030509',shade=True,zorder=2)
         ax.plot_wireframe(*(3*a for a in xyz),rstride=5,cstride=6,color='#6a829c',alpha=.25,linewidth=.5,zorder=3)
-        yy,zz=np.meshgrid(np.linspace(-12,12,40),np.linspace(-12,12,40))
-        if self.image is None:
-            colors=np.zeros((40,40,4)); colors[:]=[.12,.24,.36,.7]
-        else:
-            colors=np.asarray(Image.fromarray(self.image).resize((40,40)))/255.
-            # Array rows top-to-bottom, screen z bottom-to-top.
-            colors=colors[::-1]
-        ax.plot_surface(np.full_like(yy,-19),yy,zz,facecolors=colors,shade=False,rcount=40,ccount=40,zorder=0)
-        ax.text(-19,0,14,'観測像の展示スクリーン',color=FG,ha='center',fontsize=9)
-        ax.scatter([30],[0],[0],color='#ffffff',s=35)
-        ax.text(29,0,3,'観測位置',color=FG,fontsize=9)
+        yy, zz = np.meshgrid(
+        np.linspace(-SCREEN_HALF_SIZE, SCREEN_HALF_SIZE, 41),
+        np.linspace(-SCREEN_HALF_SIZE, SCREEN_HALF_SIZE, 41)
+        )
+        rotation = self.meta['rotation'] if self.image is not None else np.deg2rad(self.rotation.get())
+        grid = self.meta['grid'] if self.image is not None else self.kind.get() == '色つき格子'
+        # Face centres sample the source texture, never the lensed observer image.
+        colors=screen_background((yy[:-1,:-1]+yy[:-1,1:])/2,
+                                  (zz[:-1,:-1]+zz[1:,:-1])/2,rotation,grid,show_lines=False)/255.
+        ax.plot_surface(
+        np.full_like(yy, SCREEN_X),
+        yy, zz,
+        facecolors=colors,
+        shade=False,
+        rcount=len(yy),
+        ccount=len(yy),
+        zorder=0
+        )
+        if grid:
+            for yz in screen_grid_lines(rotation):
+                ax.plot([SCREEN_X,SCREEN_X],yz[:,0],yz[:,1],
+                        color=(.95,.96,1.),lw=.6,zorder=1)
+        ax.text(SCREEN_X,0,14,'背景スクリーン（衝突で停止）',color=FG,ha='center',fontsize=9)
+        ax.scatter([SCENE_OBSERVER],[0],[0],color='#ffffff',s=35)
+        ax.text(SCENE_OBSERVER-1,0,3,'観測位置',color=FG,fontsize=9)
         ax.set(xlim=(-22,32),ylim=(-16,16),zlim=(-16,16))
         ax.set_box_aspect((54,32,32)); ax.view_init(22,42)
         ax.set_axis_off(); ax.set_title('3D：光の経路をたどる',color=FG,fontsize=14)
         self.lines=[]; self.dots=[]
         for path,status,b in self.paths:
-            color='#ffad66' if status=='捕獲' else '#66e4e0'
+            color={'捕獲':'#ffad66', 'スクリーン到達':'#66e4e0',
+                   'スクリーン未到達':'#a5afc0', '未判定':'#ff00b4',
+                   '数値エラー':'#ff4040'}[status]
             line,=ax.plot([],[],[],color=color,lw=1.8,zorder=4,label=f'b={b:.3f}  {status}')
             dot,=ax.plot([],[],[],'o',color='white',ms=4,zorder=5)
             self.lines.append(line); self.dots.append(dot)
         if self.lines: ax.legend(loc='lower left',facecolor=BG,labelcolor=FG,fontsize=9)
 
     def launch(self,compare=False):
-        values=[4.5,5.2,7.] if compare else [self.b.get()]
+        values=[4.5,6.,10.] if compare else [self.b.get()]
         psi=np.deg2rad(self.psi.get())
         self.paths=[]
         for b in values:
             path,status=trajectory(b,psi)
             self.paths.append((path,status,b))
         self.frame=0; self.playing=True; self.draw_scene()
-        self.message.set(' / '.join(f'b={b:.3f}：{s}' for _,s,b in self.paths)+'。水色は脱出、オレンジは捕獲。')
+        self.message.set(' / '.join(f'b={b:.3f}：{s}' for _,s,b in self.paths)+'。水色：到達、灰：未到達、橙：捕獲。未到達は表示範囲外のr=120まで追跡します。')
         self.canvas.draw_idle()
 
     def toggle(self): self.playing=not self.playing
@@ -148,10 +166,22 @@ class BlackHoleApp:
         self.message.set('光線を数値計算しています。3D表示はそのまま操作できます。')
         def worker():
             try:
-                result=render_image(*args,progress=lambda p:self.events.put(('progress',p)))
-                self.events.put(('done',result))
-            except Exception as e: self.events.put(('error',str(e)))
-        threading.Thread(target=worker,daemon=True).start()
+                start = time.perf_counter()
+
+                result = render_image(
+                    *args,
+                    progress=lambda p: self.events.put(('progress', p))
+                )
+
+                elapsed = time.perf_counter() - start
+                print(f"Image generation time: {elapsed:.3f} s")
+
+                self.events.put(('done', result))
+
+            except Exception as e:
+                self.events.put(('error', str(e)))
+        threading.Thread(target=worker, daemon=True).start()        
+        
 
     def tick(self):
         try:
@@ -168,25 +198,28 @@ class BlackHoleApp:
                     self.ref_ax.set_title('重力がない場合',color=FG,fontsize=9)
                     self.draw_scene(); self.frame=0; self.playing=bool(self.paths)
                     self.save_button.configure(state='normal')
-                    self.message.set(f'{self.meta["rays"]:,}画素を追跡しました。黒は捕獲。像をクリックすると、その方向の光線を表示します。未判定：{self.meta["unresolved"]}')
+                    self.message.set(f'{self.meta["rays"]:,}画素：到達 {self.meta["screen_hits"]:,} / 捕獲 {self.meta["captured"]:,} / 未到達 {self.meta["missed"]:,} / 未判定 {self.meta["unresolved"]} / 数値エラー {self.meta["numerical_failures"]}。像をクリックすると光線を表示します。')
                     self.canvas.draw_idle()
         except queue.Empty: pass
         if self.playing and self.paths:
             self.frame+=1
             for (path,_,_),line,dot in zip(self.paths,self.lines,self.dots):
-                end=min(len(path),max(2,int(len(path)*self.frame/180)))
-                shown=path[:end:max(1,end//650)]
+                end=min(len(path),max(2,int(len(path)*self.frame/90)))
+                indices=np.unique(np.r_[np.arange(0,end,max(1,end//650)),end-1])
+                shown=path[indices]  # Always include the actual terminal point.
                 line.set_data_3d(*shown.T); dot.set_data_3d(*path[end-1:end].T)
-            if self.frame>=180: self.playing=False
+            if self.frame>=90: self.playing=False
             self.canvas.draw_idle()
-        self.root.after(40,self.tick)
+        self.root.after(20,self.tick)
 
     def pick(self,event):
         if self.image is None or event.inaxes is not self.result_ax or event.xdata is None: return
-        n=self.meta['n']; t=np.tan(np.deg2rad(self.meta['fov']/2))
-        y=(event.xdata+.5-n/2)/(n/2)*t; z=-(event.ydata+.5-n/2)/(n/2)*t
-        rho=np.hypot(y,z); b=30*rho/np.sqrt(1+rho*rho)/np.sqrt(1-2/30)
-        self.b.set(b); self.psi.set(np.rad2deg(np.arctan2(z,y))%360); self.launch()
+        n=self.meta['n']
+        # imshow reports continuous positions; launch the selected pixel centre.
+        col=int(np.clip(np.floor(event.xdata+.5),0,n-1))
+        row=int(np.clip(np.floor(event.ydata+.5),0,n-1))
+        b,psi=pixel_ray(col,row,n,self.meta['fov'])
+        self.b.set(b); self.psi.set(np.rad2deg(psi)%360); self.launch()
 
     def save(self):
         if self.image is None: return
