@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+plt.rcParams["font.family"] = "MS Gothic"   # 文字化けするなら "Yu Gothic" や "Meiryo" でも可
+plt.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化け防止
+
 from geodesic import rk4_step
 
 def calculate_bending_angle(b, M, r_start, r_end, h):
@@ -80,22 +83,53 @@ def reg1dim(x, y):
 m, C_fit = reg1dim(X[3:], alpha_arr[3:])
 
 # 全7点の数値結果
-plt.scatter(X, alpha_arr, label="Numerical results")
+plt.figure(figsize=(10, 6))
 
-# 近傍4点から得られた回帰直線
+plt.scatter(
+    X, alpha_arr,
+    label="数値計算結果",
+    zorder=3
+)
+
+# 臨界値近傍の4点から得られた回帰直線
 x_line = np.linspace(X[3], X[-1], 100)
 
 plt.plot(
     x_line,
     m * x_line + C_fit,
-    color="r",
-    label=f"y = {m:.6f}x + {C_fit:.6f}"
+    color="red",
+    label=f"y = {m:.6f}x {C_fit:+.6f}"
 )
 
-plt.xlabel("-log(delta)")
-plt.ylabel("Bending angle (rad)")
-plt.legend()
-plt.grid()
+# 軸・タイトル
+plt.xlabel(r"$-\log\delta$", fontsize=13)
+plt.ylabel(r"偏向角 $\alpha$ [rad]", fontsize=13)
+plt.title(
+    "臨界値近傍における偏向角の対数発散",
+    fontsize=15,
+    pad=12,
+    y=-0.2
+)
+
+# 目盛り
+plt.minorticks_on()
+plt.tick_params(
+    axis="both",
+    which="both",
+    direction="in",
+    top=True,
+    right=True
+)
+
+# 凡例とグリッド
+plt.legend(
+    loc="upper left",
+    bbox_to_anchor=(0.02, 0.98),
+    fontsize=11
+)
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
 plt.show()
 
 print(f"slope = {m:.6f}")
@@ -104,13 +138,58 @@ print(f"intercept = {C_fit:.6f}")
 C_eff = alpha_arr + np.log(delta_list)
 C_theory = np.log(216 * (7 - 4 * np.sqrt(3))) - np.pi
 
-plt.figure(figsize=(8, 6))
-plt.semilogx(delta_list, C_eff, "o-", label="Numerical results")
-plt.axhline(C_theory, color="black", linestyle="--",
-            label="Theoretical limit")
+plt.figure(figsize=(10, 6))
 
-plt.xlabel("delta")
-plt.ylabel("C_eff (rad)")
-plt.legend()
-plt.grid(True)
+plt.semilogx(
+    delta_list,
+    C_eff,
+    "o-",
+    label="数値計算結果"
+)
+
+plt.axhline(
+    C_theory,
+    color="black",
+    linestyle="--",
+    label="理論値"
+)
+
+# 軸・タイトル
+plt.xlabel(r"臨界値からの相対的なずれ $\delta$", fontsize=13)
+plt.ylabel(r"定数項 $C_{\mathrm{eff}}$ [rad]", fontsize=13)
+plt.title(
+    "偏向角の定数項の理論値への収束",
+    fontsize=15,
+    pad=12,
+    y=-0.2
+)
+
+# 目盛り
+plt.minorticks_on()
+plt.tick_params(
+    axis="both",
+    which="major",
+    direction="in",
+    top=True,
+    right=True,
+    length=6
+)
+
+plt.tick_params(
+    axis="both",
+    which="minor",
+    direction="in",
+    top=True,
+    right=False,
+    length=3
+)
+
+plt.legend(
+    loc="upper left",
+    bbox_to_anchor=(0.02, 0.98),
+    fontsize=11
+)
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
 plt.show()

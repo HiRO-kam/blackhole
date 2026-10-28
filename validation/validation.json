@@ -4,13 +4,6 @@
     "numpy": "2.4.2",
     "platform": "Windows-11-10.0.26200-SP0"
   },
-  "original_comparison": {
-    "derivatives_ast_unchanged": true,
-    "rk4_ast_unchanged": true,
-    "legacy_statuses_unchanged": true,
-    "rk4_residuals_bit_identical": true,
-    "legacy_terminal_coordinate_difference": 5.8036782207101464e-05
-  },
   "rays": [
     {
       "b": 0.0,
@@ -119,45 +112,17 @@
         3,
         3,
         2,
-        3,
         2,
         2,
         2,
-        3,
         2,
-        3,
-        3
+        2,
+        2,
+        2,
+        2
       ],
       "max_rk4_error": 9.001977829825591e-09,
-      "max_terminal_state_constraint_error": 0.00012343075237264411,
-      "dop853_status_agreement": true,
-      "max_position_error": 0.016910379713761626,
-      "max_screen_hit_error": 0.00015405684004741123,
-      "max_position_error_away_from_critical": 0.0002347629204442166,
-      "position_errors": [
-        0.0,
-        1.4581988194667486e-05,
-        0.0002347629204442166,
-        0.0004717399236476381,
-        0.016910379713761626,
-        0.00015405684004741123,
-        6.659151078292069e-05,
-        3.664632199591493e-07,
-        2.736547909312754e-07,
-        4.3333122150688075e-08,
-        1.619419945664093e-08,
-        6.4305886410820056e-09,
-        4.6069791834390545e-09,
-        6.219595022423601e-07,
-        4.683354497392812e-09,
-        3.079114513169408e-07,
-        1.2725377471767274e-06,
-        3.292219394364656e-07,
-        1.332219435477049e-08,
-        1.108029293347116e-06,
-        5.063742497335424e-09,
-        5.007956991702087e-08
-      ]
+      "max_terminal_state_constraint_error": 0.00012343075237264411
     },
     {
       "scale": 0.5,
@@ -176,45 +141,17 @@
         3,
         3,
         2,
-        3,
         2,
         2,
         2,
-        3,
         2,
-        3,
-        3
+        2,
+        2,
+        2,
+        2
       ],
       "max_rk4_error": 5.51886758515252e-10,
-      "max_terminal_state_constraint_error": 2.393393797939236e-05,
-      "dop853_status_agreement": true,
-      "max_position_error": 0.0010567840827423267,
-      "max_screen_hit_error": 9.628415516949451e-06,
-      "max_position_error_away_from_critical": 4.562908360740073e-05,
-      "position_errors": [
-        0.0,
-        3.710196000152788e-05,
-        4.562908360740073e-05,
-        4.96562457132064e-05,
-        0.0010567840827423267,
-        9.628415516949451e-06,
-        4.18779523503332e-06,
-        6.603376383555299e-08,
-        1.7217584529695345e-08,
-        2.932163507240377e-09,
-        9.686198945355521e-10,
-        5.099907031992699e-10,
-        4.975129636202025e-10,
-        5.126258676914227e-08,
-        7.705374787402668e-10,
-        2.678097104091438e-07,
-        3.8563211024467137e-07,
-        3.8737298531314695e-07,
-        2.329069473967333e-09,
-        3.4684114144169884e-07,
-        4.647969319386587e-09,
-        1.1132323332476623e-08
-      ]
+      "max_terminal_state_constraint_error": 2.393393797939236e-05
     },
     {
       "scale": 0.25,
@@ -233,45 +170,17 @@
         3,
         3,
         2,
-        3,
         2,
         2,
         2,
-        3,
         2,
-        3,
-        3
+        2,
+        2,
+        2,
+        2
       ],
       "max_rk4_error": 3.417355287638202e-11,
-      "max_terminal_state_constraint_error": 3.285829322963174e-06,
-      "dop853_status_agreement": true,
-      "max_position_error": 6.891098763795628e-05,
-      "max_screen_hit_error": 5.999282010040158e-07,
-      "max_position_error_away_from_critical": 6.216665351411975e-06,
-      "position_errors": [
-        0.0,
-        5.272482177939277e-06,
-        6.216665351411975e-06,
-        3.3275199344371613e-06,
-        6.891098763795628e-05,
-        5.999282010040158e-07,
-        2.5531634861852847e-07,
-        1.595520482874349e-08,
-        1.0189164632168802e-09,
-        2.350137940976387e-10,
-        1.201174585868426e-10,
-        4.4657059837484206e-11,
-        3.282502036719821e-11,
-        3.413972364802184e-08,
-        1.40483833538101e-10,
-        1.0056067259791074e-08,
-        1.0875705225288362e-07,
-        1.2539013734886106e-07,
-        4.423031507142844e-11,
-        1.1526902869495117e-07,
-        9.94296588214118e-10,
-        2.0660401020651657e-09
-      ]
+      "max_terminal_state_constraint_error": 3.285829322963174e-06
     }
   ],
   "images": [
@@ -284,17 +193,17 @@
       "grid": true,
       "scale": 1.0,
       "captured": 2156,
-      "screen_hits": 11372,
-      "missed": 2856,
+      "screen_hits": 12996,
+      "missed": 1232,
       "unresolved": 0,
       "numerical_failures": 0,
       "max_error": 9.185769034303348e-09,
       "max_endpoint_error": 0.00011541295734862622,
-      "elapsed_seconds": 1.8806414999999106,
+      "elapsed_seconds": 0.9929972999962047,
       "observer": 30.0,
       "outer": 120.0,
       "screen_x": -19.0,
-      "screen_half_size": 12.0
+      "screen_half_size": 24.0
     },
     {
       "rays": 65536,
@@ -305,17 +214,17 @@
       "grid": true,
       "scale": 1.0,
       "captured": 8628,
-      "screen_hits": 45456,
-      "missed": 11452,
+      "screen_hits": 52016,
+      "missed": 4892,
       "unresolved": 0,
       "numerical_failures": 0,
       "max_error": 9.178622528693836e-09,
       "max_endpoint_error": 0.00012471974674455044,
-      "elapsed_seconds": 3.827173600002425,
+      "elapsed_seconds": 2.8951772000000346,
       "observer": 30.0,
       "outer": 120.0,
       "screen_x": -19.0,
-      "screen_half_size": 12.0
+      "screen_half_size": 24.0
     },
     {
       "rays": 262144,
@@ -326,92 +235,30 @@
       "grid": true,
       "scale": 1.0,
       "captured": 34568,
-      "screen_hits": 181780,
-      "missed": 45796,
+      "screen_hits": 207796,
+      "missed": 19780,
       "unresolved": 0,
       "numerical_failures": 0,
       "max_error": 9.277577373012491e-09,
       "max_endpoint_error": 0.0001254518930451365,
-      "elapsed_seconds": 10.882261899998412,
+      "elapsed_seconds": 10.360423499980243,
       "observer": 30.0,
       "outer": 120.0,
       "screen_x": -19.0,
-      "screen_half_size": 12.0
+      "screen_half_size": 24.0
     }
   ],
   "image_step_halving_128": {
     "changed_rgb_pixels": 0,
     "counts_default": {
       "captured": 2156,
-      "screen_hits": 11372,
-      "missed": 2856
+      "screen_hits": 12996,
+      "missed": 1232
     },
     "counts_half": {
       "captured": 2156,
-      "screen_hits": 11372,
-      "missed": 2856
+      "screen_hits": 12996,
+      "missed": 1232
     }
-  },
-  "gui": {
-    "tk_creation": true,
-    "launch_compare": true,
-    "pause_resume": true,
-    "reset_view": true,
-    "background_thread_generation": true,
-    "pixel_selection_consistent": true,
-    "animation_terminal_point": true,
-    "jpeg_save": true,
-    "callback_errors": []
-  },
-  "additional_camera_and_texture_checks": [
-    {
-      "rays": 4096,
-      "unique": 528,
-      "fov": 20.0,
-      "n": 64,
-      "rotation": 1.0471975511965976,
-      "grid": false,
-      "scale": 1.0,
-      "captured": 2992,
-      "screen_hits": 92,
-      "missed": 1012,
-      "unresolved": 0,
-      "numerical_failures": 0,
-      "max_error": 9.16504450110267e-09,
-      "max_endpoint_error": 0.00011411318483067756,
-      "elapsed_seconds": 0.48413700000674,
-      "observer": 30.0,
-      "outer": 120.0,
-      "screen_x": -19.0,
-      "screen_half_size": 12.0,
-      "individual_pixel_comparisons": 169
-    },
-    {
-      "rays": 4096,
-      "unique": 528,
-      "fov": 65.0,
-      "n": 64,
-      "rotation": 0.73,
-      "grid": true,
-      "scale": 1.0,
-      "captured": 232,
-      "screen_hits": 1248,
-      "missed": 2616,
-      "unresolved": 0,
-      "numerical_failures": 0,
-      "max_error": 8.860012279399143e-09,
-      "max_endpoint_error": 0.00011886218781920199,
-      "elapsed_seconds": 0.4483629999886034,
-      "observer": 30.0,
-      "outer": 120.0,
-      "screen_x": -19.0,
-      "screen_half_size": 12.0,
-      "individual_pixel_comparisons": 169
-    }
-  ],
-  "unit_tests": {
-    "count": 25,
-    "passed": 25,
-    "command": "python -m unittest -v test_screen"
   }
 }

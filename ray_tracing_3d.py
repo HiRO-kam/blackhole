@@ -45,12 +45,18 @@ class BlackHoleApp:
         style.configure('TLabel', background=BG, foreground=FG, font=('',10))
         style.configure('TButton', padding=7)
         self.events=queue.Queue(); self.busy=False; self.image=None
-        self.paths=[]; self.lines=[]; self.dots=[]; self.frame=0; self.playing=False
+        self.paths = []
+        self.lines = []
+        self.dots = []
+        self.frame = 0
+        self.playing = False
+        self.active_start = 0
         top=ttk.Frame(root, padding=(16,10)); top.pack(fill='x')
         ttk.Label(top,text='BLACK HOLE  /  光はどこへ行く？',font=('',20,'bold')).pack(anchor='w')
         ttk.Label(top,text='① 条件を設定 → ② 光線を発射 / 像を生成 → ③ 生成された像をJPG保存').pack(anchor='w',pady=5)
         self.fig=Figure(figsize=(12,6), facecolor=BG)
         self.ax=self.fig.add_axes([.02,.10,.57,.82],projection='3d')
+        self.ax.view_init(22, 42)
         self.result_ax=self.fig.add_axes([.64,.36,.32,.58])
         self.ref_ax=self.fig.add_axes([.76,.05,.13,.24])
         for ax in (self.result_ax,self.ref_ax): ax.set_facecolor('#060b14'); ax.set_axis_off()
@@ -66,9 +72,42 @@ class BlackHoleApp:
         self.psi=self.slider(controls,1,'軌道の向き ψ [度]',0,360,30)
         self.fov=self.slider(controls,2,'画像の画角 [度]',20,65,45)
         self.rotation=self.slider(controls,3,'背景の回転 [度]',0,360,0)
+        batch = ttk.Frame(bottom_panel, padding=(16, 4))
+
+        batch.pack(fill='x')
+
+        ttk.Label(
+            batch,
+            text='複数発射 b/M：'
+        ).pack(side='left')
+
+        self.batch_values = tk.StringVar(value='4.5, 6.0, 10.0')
+
+        ttk.Entry(
+            batch,
+            textvariable=self.batch_values,
+            width=45
+        ).pack(side='left', padx=5)
+
+        ttk.Button(
+            batch,
+            text='まとめて発射',
+            command=self.launch_batch
+        ).pack(side='left', padx=5)
+
+        ttk.Button(
+            batch,
+            text='履歴をクリア',
+            command=self.clear_paths
+        ).pack(side='left', padx=5)
+
         actions=ttk.Frame(bottom_panel,padding=(16,8)); actions.pack(fill='x')
         ttk.Button(actions,text='光線を発射',command=self.launch).pack(side='left',padx=3)
-        ttk.Button(actions,text='3本を比較',command=lambda:self.launch(True)).pack(side='left',padx=3)
+        ttk.Button(
+        actions,
+        text='3本を比較',
+        command=lambda: self.launch([4.5, 6.0, 10.0])
+        ).pack(side='left', padx=3)
         ttk.Button(actions,text='停止 / 再開',command=self.toggle).pack(side='left',padx=3)
         ttk.Button(actions,text='視点を戻す',command=self.reset_view).pack(side='left',padx=3)
         self.kind=tk.StringVar(value='色つき格子')
@@ -101,8 +140,14 @@ class BlackHoleApp:
         return var
 
     def draw_scene(self):
-        ax=self.ax; ax.clear(); ax.set_facecolor(BG)
-        ax.computed_zorder=False
+        ax = self.ax
+
+        # 現在の視点を保存
+        elev, azim = ax.elev, ax.azim
+
+        ax.clear()
+        ax.set_facecolor(BG)
+        ax.computed_zorder = False
         u,v=np.meshgrid(np.linspace(0,2*np.pi,48),np.linspace(0,np.pi,24))
         xyz=(np.cos(u)*np.sin(v),np.sin(u)*np.sin(v),np.cos(v))
         ax.plot_surface(*(2*a for a in xyz),color='#030509',shade=True,zorder=2)
@@ -133,28 +178,120 @@ class BlackHoleApp:
         ax.scatter([SCENE_OBSERVER],[0],[0],color='#ffffff',s=35)
         ax.text(SCENE_OBSERVER-1,0,3,'観測位置',color=FG,fontsize=9)
         ax.set(xlim=(-22,32),ylim=(-16,16),zlim=(-16,16))
-        ax.set_box_aspect((54,32,32)); ax.view_init(22,42)
+        ax.set_box_aspect((54,32,32))
+        ax.view_init(elev=elev, azim=azim)
         ax.set_axis_off(); ax.set_title('3D：光の経路をたどる',color=FG,fontsize=14)
-        self.lines=[]; self.dots=[]
-        for path,status,b in self.paths:
-            color={'捕獲':'#ffad66', 'スクリーン到達':'#66e4e0',
-                   'スクリーン未到達':'#a5afc0', '未判定':'#ff00b4',
-                   '数値エラー':'#ff4040'}[status]
-            line,=ax.plot([],[],[],color=color,lw=1.8,zorder=4,label=f'b={b:.3f}  {status}')
-            dot,=ax.plot([],[],[],'o',color='white',ms=4,zorder=5)
-            self.lines.append(line); self.dots.append(dot)
-        if self.lines: ax.legend(loc='lower left',facecolor=BG,labelcolor=FG,fontsize=9)
+        self.lines = []
+        self.dots = []
 
-    def launch(self,compare=False):
-        values=[4.5,6.,10.] if compare else [self.b.get()]
-        psi=np.deg2rad(self.psi.get())
-        self.paths=[]
+        for i, (path, status, b) in enumerate(self.paths):
+            color = {
+                '捕獲': '#ffad66',
+                'スクリーン到達': '#66e4e0',
+                'スクリーン未到達': '#a5afc0',
+                '未判定': '#ff00b4',
+                '数値エラー': '#ff4040'
+            }[status]
+
+            # 過去の光線は全経路を表示
+            if not self.playing or i < self.active_start:
+                end = len(path)
+            else:
+                end = min(
+                    len(path),
+                    max(2, int(len(path) * self.frame / 90))
+                )
+
+            indices = np.unique(
+                np.r_[np.arange(0, end, max(1, end // 650)), end - 1]
+            )
+
+            shown = path[indices]
+
+            line, = ax.plot(
+                *shown.T,
+                color=color,
+                lw=1.8,
+                zorder=4,
+                label=f'b={b:.3f}  {status}'
+            )
+
+            dot, = ax.plot(
+                *path[end-1:end].T,
+                'o',
+                color='white',
+                ms=4,
+                zorder=5
+            )
+
+            self.lines.append(line)
+            self.dots.append(dot)
+
+        if self.lines:
+            ax.legend(
+                loc='lower left',
+                facecolor=BG,
+                labelcolor=FG,
+                fontsize=9
+            )
+
+    def launch(self, values=None):
+        if values is None:
+            values = [self.b.get()]
+
+        psi = np.deg2rad(self.psi.get())
+
+        # 今回追加する光線の開始位置
+        self.active_start = len(self.paths)
+
         for b in values:
-            path,status=trajectory(b,psi)
-            self.paths.append((path,status,b))
-        self.frame=0; self.playing=True; self.draw_scene()
-        self.message.set(' / '.join(f'b={b:.3f}：{s}' for _,s,b in self.paths)+'。水色：到達、灰：未到達、橙：捕獲。未到達は表示範囲外のr=120まで追跡します。')
+            path, status = trajectory(b, psi)
+            self.paths.append((path, status, b))
+
+        self.frame = 0
+        self.playing = True
+
+        self.draw_scene()
+
+        self.message.set(
+            f'今回 {len(values)} 本を発射 / '
+            f'累計 {len(self.paths)} 本。'
+        )
+
         self.canvas.draw_idle()
+
+    def launch_batch(self):
+        try:
+            values = [
+                float(v.strip())
+                for v in self.batch_values.get().split(',')
+            ]
+
+            if not 1 <= len(values) <= 20:
+                raise ValueError('光線は1〜20本で指定してください。')
+
+            if not all(np.isfinite(b) and 0 <= b <= 12 for b in values):
+                raise ValueError('b値は0〜12の範囲で指定してください。')
+
+        except ValueError as e:
+            messagebox.showerror('入力エラー', str(e))
+            return
+
+        self.launch(values)
+
+
+    def clear_paths(self):
+        self.paths.clear()
+        self.lines.clear()
+        self.dots.clear()
+
+        self.frame = 0
+        self.playing = False
+        self.active_start = 0
+
+        self.draw_scene()
+        self.message.set('光線の発射履歴をクリアしました。')
+        self.canvas.draw_idle()    
 
     def toggle(self): self.playing=not self.playing
     def reset_view(self): self.ax.view_init(22,42); self.canvas.draw_idle()
@@ -196,19 +333,38 @@ class BlackHoleApp:
                     self.result_ax.set_title(f'生成された像  {self.meta["n"]} × {self.meta["n"]}',color=FG,fontsize=14)
                     self.ref_ax.clear(); self.ref_ax.imshow(reference); self.ref_ax.set_axis_off()
                     self.ref_ax.set_title('重力がない場合',color=FG,fontsize=9)
-                    self.draw_scene(); self.frame=0; self.playing=bool(self.paths)
+                    self.draw_scene()
                     self.save_button.configure(state='normal')
                     self.message.set(f'{self.meta["rays"]:,}画素：到達 {self.meta["screen_hits"]:,} / 捕獲 {self.meta["captured"]:,} / 未到達 {self.meta["missed"]:,} / 未判定 {self.meta["unresolved"]} / 数値エラー {self.meta["numerical_failures"]}。像をクリックすると光線を表示します。')
                     self.canvas.draw_idle()
         except queue.Empty: pass
         if self.playing and self.paths:
-            self.frame+=1
-            for (path,_,_),line,dot in zip(self.paths,self.lines,self.dots):
-                end=min(len(path),max(2,int(len(path)*self.frame/90)))
-                indices=np.unique(np.r_[np.arange(0,end,max(1,end//650)),end-1])
-                shown=path[indices]  # Always include the actual terminal point.
-                line.set_data_3d(*shown.T); dot.set_data_3d(*path[end-1:end].T)
-            if self.frame>=90: self.playing=False
+            self.frame += 1
+
+            # 今回発射した光線だけを更新
+            for i in range(self.active_start, len(self.paths)):
+                path, _, _ = self.paths[i]
+                line = self.lines[i]
+                dot = self.dots[i]
+
+                end = min(
+                    len(path),
+                    max(2, int(len(path) * self.frame / 90))
+                )
+
+                indices = np.unique(
+                    np.r_[np.arange(0, end, max(1, end // 650)), end - 1]
+                )
+
+                shown = path[indices]
+
+                line.set_data_3d(*shown.T)
+                dot.set_data_3d(*path[end-1:end].T)
+
+            if self.frame >= 90:
+                self.playing = False
+                self.active_start = len(self.paths)
+
             self.canvas.draw_idle()
         self.root.after(20,self.tick)
 
