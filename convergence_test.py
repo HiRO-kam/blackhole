@@ -127,9 +127,7 @@ plt.subplots_adjust(
     top=0.94
 )
 
-output = Path(
-r"C:\Users\sun8s\OneDrive\Desktop\latex\blackhole_figure\convergence_test.png"
-)
+output = Path(__file__).resolve().parent / "error_evaluation.png"
 
 plt.savefig(output, dpi=100)
 
