@@ -169,10 +169,8 @@ def main():
     )
 
     # 800 × 600 pxで保存
-    output = Path(
-    r"C:\Users\sun8s\OneDrive\Desktop\latex\blackhole_figure\error_evaluation.png"
-    )
-
+    output = Path(__file__).resolve().parent / "error_evaluation.png"
+    
     plt.savefig(output, dpi=100)
 
     with Image.open(output) as img:
