@@ -1,6 +1,6 @@
 import sympy as sp
 
-sp.var('t, r, theta, phi')
+t, r, theta, phi = sp.symbols('t r theta phi')
 
 xi = sp.Matrix([ [t],[r],[theta],[phi] ])
 
